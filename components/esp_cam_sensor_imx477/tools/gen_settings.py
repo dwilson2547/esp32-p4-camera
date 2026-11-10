@@ -3,8 +3,9 @@
 
 Usage: gen_settings.py <path/to/imx477.c> <out.h>
 Takes mode_common_regs and mode_2028x1520_regs verbatim, then overrides the
-digital crop / output size to 1920x1520 (the ESP32-P4 datapath tops out
-between 1920 and 2048 px wide).
+digital crop / output size to 1920x1520 (the ESP32-P4 ISP tops out at 1920 px
+wide). mode_4056x3040_regs (full resolution, unbinned) is taken verbatim: it
+is only captured raw, with the ISP bypassed.
 """
 import math, re, sys
 
@@ -26,6 +27,7 @@ def table(name):
 
 common = table('mode_common_regs')
 mode = table('mode_2028x1520_regs')
+full = table('mode_4056x3040_regs')
 
 # Output geometry: digital crop is in post-binning coordinates (see the Linux
 # 1332x990 mode: 2028-wide binned frame, X offset 348, width 1332).
@@ -97,6 +99,12 @@ static const imx477_reginfo_t imx477_mode_{OUT_W}x{OUT_H}_regs[] = {{
     {{IMX477_REG_END, 0x00}},
 }};
 
+/* Linux mode_4056x3040_regs (full resolution, no binning), verbatim. */
+static const imx477_reginfo_t imx477_mode_4056x3040_regs[] = {{
+{fmt(full)}
+    {{IMX477_REG_END, 0x00}},
+}};
+
 /* Analog gain menu: total gain in milli-units, and the code that gives it. */
 static const uint32_t imx477_total_gain_val_map[] = {{
 {arr(gains)}
@@ -107,4 +115,4 @@ static const uint16_t imx477_ana_gain_code_map[] = {{
 }};
 '''
 open(sys.argv[2], 'w').write(h)
-print(f'common={len(common)} mode={len(mode2)} gains={len(gains)} max={gains[-1]}')
+print(f'common={len(common)} mode={len(mode2)} full={len(full)} gains={len(gains)} max={gains[-1]}')

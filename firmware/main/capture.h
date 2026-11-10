@@ -25,3 +25,8 @@ esp_err_t capture_frame(const uint8_t *rgb565, size_t size);
 // Queue the SD card write/read selftest on the writer task, behind any photos
 // waiting (diagnostic). Ignored while one is already queued or running.
 void capture_card_test(void);
+
+// Write a raw sensor frame to SD_MOUNT_POINT/DCIM/RAW_nnnn.RAW now, blocking
+// until it is on the card (same numbering as the JPEGs). Refused while photos
+// are still queued for the writer task.
+esp_err_t capture_save_raw(const uint8_t *data, size_t len);

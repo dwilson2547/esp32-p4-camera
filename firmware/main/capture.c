@@ -44,7 +44,7 @@ static volatile bool s_card_test;
 static uint32_t s_last_len = 1024 * 1024;     // room to keep free for the next shot
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
-// Continue numbering after the highest IMG_nnnn.JPG already in DCIM.
+// Continue numbering after the highest IMG_nnnn.JPG / RAW_nnnn.RAW already in DCIM.
 static void find_next_number(void)
 {
     DIR *d = opendir(DCIM_DIR);
@@ -52,7 +52,8 @@ static void find_next_number(void)
     struct dirent *e;
     int max = 0, n;
     while ((e = readdir(d)) != NULL)
-        if (sscanf(e->d_name, "IMG_%4d.JPG", &n) == 1 && n > max) max = n;
+        if ((sscanf(e->d_name, "IMG_%4d.JPG", &n) == 1 || sscanf(e->d_name, "RAW_%4d.RAW", &n) == 1) && n > max)
+            max = n;
     closedir(d);
     s_next_num = max + 1;
 }
@@ -215,5 +216,25 @@ esp_err_t capture_frame(const uint8_t *rgb565, size_t size)
     }
     ESP_LOGI(TAG, "encoded + queued in %.1f ms (%" PRIu32 " KB, %d waiting for the card)",
              (esp_timer_get_time() - t0) / 1e3, s_out_len / 1024, s_pending);
+    return ESP_OK;
+}
+
+esp_err_t capture_save_raw(const uint8_t *data, size_t len)
+{
+    if (!s_chunk || !s_queue) return ESP_ERR_INVALID_STATE;
+    if (s_pending || s_card_test) return ESP_ERR_INVALID_STATE;   // the writer owns the card
+    char path[48];
+    snprintf(path, sizeof path, DCIM_DIR "/RAW_%04d.RAW", s_next_num);
+    int64_t t0 = esp_timer_get_time();
+    bool ok = write_file(path, data, len);
+    if (!ok && sd_card_remount() == ESP_OK) ok = write_file(path, data, len);
+    float ms = (esp_timer_get_time() - t0) / 1e3f;
+    if (!ok) {
+        ESP_LOGE(TAG, "raw frame lost: SD card not writable");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "saved %s: %u KB, write %.0f ms (%.2f MB/s)", path, (unsigned)(len / 1024), ms,
+             len / 1048576.0f / (ms / 1000.0f));
+    s_next_num++;
     return ESP_OK;
 }

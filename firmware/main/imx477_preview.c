@@ -25,12 +25,14 @@
 #include "freertos/semphr.h"
 #include "sd_card.h"
 #include "capture.h"
+#include "fullres.h"
 #include "ui.h"
 
 // Shutter button: a touch that starts on it asks the main loop for a photo.
 static volatile bool s_shot_requested;
 static volatile bool s_button_down;
 static volatile bool s_card_test_requested;   // diagnostic: tap the top-left corner
+static volatile bool s_fullres_requested;     // spike: tap the top-right corner for a 12 MP raw frame
 
 static void touch_task(void *arg)
 {
@@ -48,6 +50,7 @@ static void touch_task(void *arg)
             ESP_LOGI("touch", "press at (%u,%u)%s", pt[0].x, pt[0].y, hit ? ": shutter" : "");
             if (hit) { s_shot_requested = true; s_button_down = true; }
             else if (pt[0].x < 150 && pt[0].y < 150) s_card_test_requested = true;
+            else if (pt[0].x > 650 && pt[0].y < 150) s_fullres_requested = true;
         }
         if (!down) s_button_down = false;
         was_down = down;
@@ -269,6 +272,25 @@ void app_main(void)
         if (s_card_test_requested) {
             s_card_test_requested = false;
             if (can_capture) capture_card_test();
+        }
+        if (s_fullres_requested) {
+            s_fullres_requested = false;
+            if (!can_capture) {
+                ESP_LOGW(TAG, "full-res: no SD card");
+            } else if (capture_pending() > 0) {
+                ESP_LOGW(TAG, "full-res: %d photos still going to the card, try again when they are saved",
+                         capture_pending());
+            } else {
+                // Nothing is with the PPA (waited for above) and b is ours; the
+                // capture tears the whole stream down and builds it again.
+                ui_draw_shutter(SHUTTER_SAVING);
+                if (fullres_capture(fd, cam_buf, BUFFER_COUNT, cam_w, cam_h) != ESP_OK) {
+                    ESP_LOGE(TAG, "preview lost after full-res capture; stopping");
+                    return;
+                }
+                shutter_drawn = -1;
+                continue;
+            }
         }
         if (flash_frames > 0) {
             ioctl(fd, VIDIOC_QBUF, &b);

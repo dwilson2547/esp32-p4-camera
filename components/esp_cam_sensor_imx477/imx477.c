@@ -8,8 +8,11 @@
  * register sequences and timing come from the Raspberry Pi Linux driver
  * drivers/media/i2c/imx477.c (GPL-2.0), which is why this file is GPL-2.0.
  *
- * One mode for now: 1920x1520 RAW10, the Linux 2x2-binned full-field mode
- * digitally cropped from 2028 to 1920 wide to fit the P4's datapath.
+ * Two modes, both RAW10:
+ *   1920x1520: the Linux 2x2-binned full-field mode digitally cropped from
+ *              2028 to 1920 wide to fit the P4's ISP (the preview).
+ *   4056x3040: full resolution, unbinned. Wider than the ISP can process, so
+ *              it is only captured raw with the ISP bypassed.
  */
 #include <string.h>
 #include "sdkconfig.h"
@@ -50,11 +53,20 @@
 #define IMX477_VTS              2197
 #define IMX477_TLINE_NS         11862   /* HTS / pixel rate */
 #define IMX477_FPS              38      /* 840e6 / (9964 * 2197) = 38.4 */
+/*
+ * Full resolution: Linux minimum line length for 4056 x 10 bit
+ * (4056 * 10 * 840 / 1800 + 500 = 19428) and its default frame length 3500.
+ */
+#define IMX477_FULL_HTS         19428
+#define IMX477_FULL_VTS         3500
+#define IMX477_FULL_TLINE_NS    23129   /* 19428 / 840 MHz */
+#define IMX477_FULL_FPS         12      /* 840e6 / (19428 * 3500) = 12.35 */
 
 static const char *TAG = "imx477";
 
 enum {
     IMX477_FMT_1920x1520_RAW10 = 0,
+    IMX477_FMT_4056x3040_RAW10 = 1,
 };
 
 static const esp_cam_sensor_isp_info_t imx477_isp_info[] = {
@@ -67,6 +79,18 @@ static const esp_cam_sensor_isp_info_t imx477_isp_info[] = {
             .exp_def = IMX477_EXPOSURE_DEFAULT,
             .gain_def = IMX477_ANA_GAIN_DEFAULT,
             .tline_ns = IMX477_TLINE_NS,
+            .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
+        }
+    },
+    [IMX477_FMT_4056x3040_RAW10] = {
+        .isp_v1_info = {
+            .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
+            .pclk = IMX477_PIXEL_RATE,
+            .hts = IMX477_FULL_HTS,
+            .vts = IMX477_FULL_VTS,
+            .exp_def = IMX477_EXPOSURE_DEFAULT,
+            .gain_def = IMX477_ANA_GAIN_DEFAULT,
+            .tline_ns = IMX477_FULL_TLINE_NS,
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
         }
     },
@@ -84,6 +108,24 @@ static const esp_cam_sensor_format_t imx477_format_info[] = {
         .regs_size = ARRAY_SIZE(imx477_mode_1920x1520_regs),
         .fps = IMX477_FPS,
         .isp_info = &imx477_isp_info[IMX477_FMT_1920x1520_RAW10],
+        .mipi_info = {
+            .mipi_clk = IMX477_MIPI_LANE_RATE,
+            .lane_num = 2,
+            .line_sync_en = 0,
+        },
+        .reserved = NULL,
+    },
+    [IMX477_FMT_4056x3040_RAW10] = {
+        .name = "MIPI_2lane_24Minput_RAW10_4056x3040_12fps",
+        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+        .port = ESP_CAM_SENSOR_MIPI_CSI,
+        .xclk = IMX477_XCLK_FREQ_HZ,
+        .width = 4056,
+        .height = 3040,
+        .regs = imx477_mode_4056x3040_regs,
+        .regs_size = ARRAY_SIZE(imx477_mode_4056x3040_regs),
+        .fps = IMX477_FULL_FPS,
+        .isp_info = &imx477_isp_info[IMX477_FMT_4056x3040_RAW10],
         .mipi_info = {
             .mipi_clk = IMX477_MIPI_LANE_RATE,
             .lane_num = 2,
@@ -221,6 +263,15 @@ static esp_err_t imx477_set_orientation(esp_cam_sensor_device_t *dev, int hmirro
                  "re-set the sensor format to pick it up");
     }
     return imx477_apply_orientation(dev);
+}
+
+/* Line time of the current mode, for exposure conversions. */
+static uint32_t imx477_tline_ns(esp_cam_sensor_device_t *dev)
+{
+    if (dev->cur_format && dev->cur_format->isp_info && dev->cur_format->isp_info->isp_v1_info.tline_ns) {
+        return dev->cur_format->isp_info->isp_v1_info.tline_ns;
+    }
+    return IMX477_TLINE_NS;
 }
 
 static uint32_t imx477_exposure_max(esp_cam_sensor_device_t *dev)
@@ -415,7 +466,7 @@ static esp_err_t imx477_set_para_value(esp_cam_sensor_device_t *dev, uint32_t id
         break;
     case ESP_CAM_SENSOR_EXPOSURE_US: {
         uint32_t us = *(const uint32_t *)arg;
-        ret = imx477_set_exposure(dev, (uint32_t)(((uint64_t)us * 1000) / IMX477_TLINE_NS));
+        ret = imx477_set_exposure(dev, (uint32_t)(((uint64_t)us * 1000) / imx477_tline_ns(dev)));
         break;
     }
     case ESP_CAM_SENSOR_GAIN:
@@ -430,7 +481,7 @@ static esp_err_t imx477_set_para_value(esp_cam_sensor_device_t *dev, uint32_t id
         if (g->exposure_val != 0) {
             lines = g->exposure_val;
         } else if (g->exposure_us != 0) {
-            lines = (uint32_t)(((uint64_t)g->exposure_us * 1000) / IMX477_TLINE_NS);
+            lines = (uint32_t)(((uint64_t)g->exposure_us * 1000) / imx477_tline_ns(dev));
         } else {
             ret = ESP_ERR_INVALID_ARG;
             break;
@@ -517,8 +568,9 @@ static esp_err_t imx477_write_mode(esp_cam_sensor_device_t *dev, const esp_cam_s
     if (ret == ESP_OK) ret = imx477_write(s, IMX477_REG_XVS_IO_CTRL, 0);
     if (ret == ESP_OK) ret = imx477_write(s, IMX477_REG_MC_MODE, 0);
     /* Frame timing (Linux sets these through the HBLANK/VBLANK controls). */
-    if (ret == ESP_OK) ret = imx477_write16(s, IMX477_REG_LINE_LENGTH_H, IMX477_HTS);
-    if (ret == ESP_OK) ret = imx477_write16(s, IMX477_REG_FRAME_LENGTH_H, IMX477_VTS);
+    const esp_cam_sensor_isp_info_t *ii = format->isp_info;
+    if (ret == ESP_OK) ret = imx477_write16(s, IMX477_REG_LINE_LENGTH_H, ii ? ii->isp_v1_info.hts : IMX477_HTS);
+    if (ret == ESP_OK) ret = imx477_write16(s, IMX477_REG_FRAME_LENGTH_H, ii ? ii->isp_v1_info.vts : IMX477_VTS);
     if (ret == ESP_OK) ret = imx477_write(s, IMX477_REG_LONG_EXP_SHIFT, 0);
     ESP_RETURN_ON_FALSE(ret == ESP_OK, ret, TAG, "format/timing regs failed");
     return ESP_OK;
@@ -531,6 +583,15 @@ static esp_err_t imx477_set_format(esp_cam_sensor_device_t *dev, const esp_cam_s
         format = &imx477_format_info[IMX477_DEFAULT_FORMAT_INDEX];
     }
 
+    /*
+     * A mode change keeps the exposure time and gain the auto exposure had
+     * reached, so a full-resolution still is exposed like the preview. The
+     * line time differs between modes, so the exposure is carried in ns.
+     * Nothing to carry on the first set_format (exposure_val is still 0).
+     */
+    imx477_para_t *pp = (imx477_para_t *)dev->priv;
+    const uint64_t carry_ns = pp ? (uint64_t)pp->exposure_val * imx477_tline_ns(dev) : 0;
+    const uint32_t carry_gain = pp ? pp->gain_index : IMX477_DEFAULT_GAIN_INDEX;
     esp_err_t ret = imx477_write_mode(dev, format);
     if (ret != ESP_OK) {
         return ret;
@@ -547,8 +608,13 @@ static esp_err_t imx477_set_format(esp_cam_sensor_device_t *dev, const esp_cam_s
                  bayer[(para->vflip ? 2 : 0) | (para->hmirror ? 1 : 0)]);
     }
 
-    imx477_set_exposure(dev, IMX477_EXPOSURE_DEFAULT);
-    imx477_set_gain_index(dev, IMX477_DEFAULT_GAIN_INDEX);
+    if (carry_ns) {
+        imx477_set_exposure(dev, (uint32_t)(carry_ns / imx477_tline_ns(dev)));
+        imx477_set_gain_index(dev, carry_gain);
+    } else {
+        imx477_set_exposure(dev, IMX477_EXPOSURE_DEFAULT);
+        imx477_set_gain_index(dev, IMX477_DEFAULT_GAIN_INDEX);
+    }
     imx477_set_digital_gain(dev, IMX477_DGTL_GAIN_DEFAULT);
 
 #if CONFIG_CAMERA_IMX477_TEST_PATTERN_AT_START
