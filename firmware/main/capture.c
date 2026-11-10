@@ -75,9 +75,19 @@ static void writer_task(void *arg)
     for (;;) {
         xSemaphoreTake(s_write_req, portMAX_DELAY);
         if (s_card_test) {
-            ESP_LOGI(TAG, "card test during preview...");
-            esp_err_t e = sd_card_selftest(8);
-            if (e != ESP_OK) { ESP_LOGE(TAG, "card test FAILED"); sd_card_remount(); }
+            // Multi-block writes of growing size, then back to single-block for photos.
+            static const size_t pieces[] = { 4 * 1024, 16 * 1024, 64 * 1024 };
+            const size_t keep = sd_card_write_piece();
+            for (int i = 0; i < 3; i++) {
+                ESP_LOGI(TAG, "card test: 8 MB in %u KB pieces...", (unsigned)(pieces[i] / 1024));
+                sd_card_set_write_piece(pieces[i]);
+                if (sd_card_selftest(8) != ESP_OK) {
+                    ESP_LOGE(TAG, "card test FAILED at %u KB pieces", (unsigned)(pieces[i] / 1024));
+                    sd_card_remount();
+                }
+            }
+            sd_card_set_write_piece(keep);
+            ESP_LOGI(TAG, "card test done");
             s_card_test = false;
             s_busy = false;
             continue;
