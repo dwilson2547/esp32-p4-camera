@@ -3,6 +3,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <inttypes.h>
+#include <unistd.h>
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -40,12 +42,25 @@ static void find_next_number(void)
     s_next_num = max + 1;
 }
 
+// Written the same way as the boot selftest (which has passed 4 MB every boot):
+// 64 KB chunks copied into internal DMA RAM, so the SD controller never DMAs
+// straight from the PSRAM JPEG buffer.
+#define WRITE_CHUNK  (64 * 1024)
+static uint8_t *s_chunk;
+
 static bool write_file(const char *path)
 {
     FILE *f = fopen(path, "wb");
     if (!f) return false;
-    size_t wr = fwrite(s_out, 1, s_out_len, f);
-    bool ok = fclose(f) == 0 && wr == s_out_len;
+    size_t wr = 0;
+    while (wr < s_out_len) {
+        size_t n = s_out_len - wr < WRITE_CHUNK ? s_out_len - wr : WRITE_CHUNK;
+        memcpy(s_chunk, s_out + wr, n);
+        if (fwrite(s_chunk, 1, n, f) != n) break;
+        wr += n;
+    }
+    bool ok = wr == s_out_len && fflush(f) == 0 && fsync(fileno(f)) == 0;
+    ok = fclose(f) == 0 && ok;
     if (!ok) {
         ESP_LOGE(TAG, "writing %s failed (%u of %" PRIu32 " bytes)", path, (unsigned)wr, s_out_len);
         remove(path);
@@ -98,6 +113,8 @@ esp_err_t capture_init(uint32_t width, uint32_t height)
         .sub_sample = JPEG_DOWN_SAMPLING_YUV422,
         .image_quality = JPEG_QUALITY,
     };
+    s_chunk = heap_caps_malloc(WRITE_CHUNK, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!s_chunk) return ESP_ERR_NO_MEM;
     s_write_req = xSemaphoreCreateBinary();
     xTaskCreate(writer_task, "sd_writer", 4096, NULL, 3, NULL);
     ESP_LOGI(TAG, "ready: %" PRIu32 "x%" PRIu32 " JPEG q%d, next file IMG_%04d.JPG", width, height, JPEG_QUALITY, s_next_num);
