@@ -18,6 +18,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#include "soc/sdmmc_struct.h"
 #include "sd_card.h"
 
 static const char *TAG = "sd_card";
@@ -39,10 +40,9 @@ esp_err_t sd_card_mount(void)
 
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.slot = SDMMC_HOST_SLOT_0;
-    // 20 MHz. At 40 MHz some photo writes timed out at a fixed byte offset that
-    // followed the file's content, not its place on the card (retrying the same
-    // data failed at the same offset; a different photo then wrote fine over it).
-    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+    // 40 MHz (upstream default). 20 MHz was tried while chasing write timeouts and
+    // failed more often, not less.
+    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
     host.pwr_ctrl_handle = pwr;
 
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -66,6 +66,11 @@ esp_err_t sd_card_mount(void)
         return err;
     }
     s_pwr = pwr;
+    // IDF 6.0.3 never programs FIFOTH.dma_multiple_transaction_size, so the SDMMC
+    // DMA runs 1-byte bursts. Upstream (esp-idf 2e02ed8, master) now defaults the
+    // P4 to 16-byte bursts (field value 3). Multi-sector writes here time out with
+    // the card left waiting for data, so set it the same way.
+    SDMMC.fifoth.dma_multiple_transaction_size = 3;
     sdmmc_card_print_info(stdout, s_card);
 
     uint64_t total = 0, free_b = 0;
