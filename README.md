@@ -19,7 +19,8 @@ The IMX477 driver here is new: no esp_cam_sensor driver for this sensor existed.
 | Camera | Raspberry Pi HQ Camera, board marked 2018 v1.0; IMX477 at I2C 0x1a, chip ID 0x0477 | ✅ verified |
 | Display | OSOYOO 3.5" DSI V3 (Pi 7" touchscreen protocol: ATTINY-style MCU 0x45, FT5x06 touch 0x38), 800x480 | ✅ verified |
 | Shared I2C | SDA GPIO 7, SCL GPIO 8; camera, display MCU and touch on one bus | ✅ verified |
-| SD card | TF slot, SDMMC slot 0 4-bit (CLK 43, CMD 44, D0-D3 39-42), card VDD from P4 LDO VO4; no card-detect. Tested card: SA08G SDHC 8 GB, 40 MHz, 8.9 MB/s write, 14.3 MB/s read+verify | ✅ verified |
+| SD card (in use) | External SPI microSD breakout on the 40-pin header: CS GPIO23 (pin 7), CLK GPIO21 (pin 11), MOSI GPIO22 (pin 12), MISO GPIO20 (pin 13), 3V3 pin 1, GND pin 9. `SD_EXTERNAL_SPI 1` in `sd_card.h`. SA08G SDHC 8 GB at 20 MHz: 3x 8 MB multi-block write tests passed, 1.2-1.3 MB/s write, 1.7 MB/s read+verify | ✅ verified |
+| Onboard TF slot | SDMMC slot 0 4-bit (CLK 43, CMD 44, D0-D3 39-42), card powered via P4 LDO VO4; no card-detect. Multi-block writes hang intermittently (card left waiting for data) on two cards, at 20 and 40 MHz; single-block writes work at 0.4 MB/s; reads 10.5 MB/s. Same signature as esp-idf #19361. Not used | ✅ verified (fault) |
 
 ## What works
 
@@ -32,11 +33,15 @@ The IMX477 driver here is new: no esp_cam_sensor driver for this sensor existed.
 - ISP tuning (`components/esp_cam_sensor_imx477/cfg/imx477_default.json`): black level, AWB range,
   colour matrix and gain limit from Raspberry Pi's libcamera IMX477 tuning. AE uses the full 22.26x
   analog gain.
-- Tap the screen to take a photo: hardware JPEG (1920x1520, q90, about 400 KB) saved as
-  `/sdcard/DCIM/IMG_nnnn.JPG`, numbering continued from the card, white flash to confirm. Measured:
-  encode about 47 ms, SD write 91-125 ms in the background; preview keeps running. Saved JPEG colours
-  checked on a PC by the user: accurate.
-- SD card mounted at `/sdcard` at boot with a write/read-back self-test (never formats the card).
+- Shutter button (bottom right) takes a photo: hardware JPEG (1920x1520, q90, about 480 KB) saved
+  as `/sdcard/DCIM/IMG_nnnn.JPG`, numbering continued from the card, white flash to confirm. Saved
+  JPEG colours checked on a PC by the user: accurate.
+- Shots queue in PSRAM (free PSRAM minus 2 MB, max 16 MB; 9.4 MB on this build) and are written in
+  the background, so the shutter is free after the encode. Measured: 15 shots in bursts of 4-5 taps,
+  ready again after 57-73 ms each, none dropped, about 0.42 s per photo to drain to the card; all
+  files open on a PC. Button: white = ready, dark dot = still writing, grey = buffer full.
+- SD card mounted at `/sdcard` at boot (never formats the card). Tap the top-left corner for an
+  8 MB write/read-back test at 4, 16 and 64 KB write sizes.
 - Test patterns (colour bars, solid R/G/B/white) via `V4L2_CID_TEST_PATTERN`.
 
 ## Layout

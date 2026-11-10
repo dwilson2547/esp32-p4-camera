@@ -1,8 +1,10 @@
 # TODO
 
 - [x] SD card mounted and self-tested
-- [x] Save photos to the SD card (tap anywhere = shutter)
-- [ ] On-screen controls beyond tap-to-shoot (shutter button, exposure, review last shot)
+- [x] Save photos to the SD card
+- [x] Shutter button, shots queued in PSRAM so the card speed does not hold up the shutter
+- [ ] Faster card writes: onboard TF slot hangs on multi-block writes (esp-idf #19361); retry when the upstream fix lands
+- [ ] On-screen controls: exposure, review last shot
 - [ ] Full-resolution still capture (sensor mode switch from the 1920x1520 preview mode)
 - [ ] Colour-temperature-indexed CCM: AWB zone model with `export_ct`, using the six libcamera CCMs
 - [ ] Confirm whether ISP AWB stats are sampled before or after the WB gains, then tighten the AWB box
