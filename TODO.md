@@ -1,6 +1,7 @@
 # TODO
 
-- [ ] Save photos to the SD card (8 GB card fitted in the dev kit's slot; slot not yet brought up)
+- [x] SD card mounted and self-tested
+- [ ] Save photos to the SD card
 - [ ] On-screen controls on the touchscreen (shutter, at minimum)
 - [ ] Full-resolution still capture (sensor mode switch from the 1920x1520 preview mode)
 - [ ] Colour-temperature-indexed CCM: AWB zone model with `export_ct`, using the six libcamera CCMs

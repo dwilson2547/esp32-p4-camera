@@ -19,7 +19,7 @@ The IMX477 driver here is new: no esp_cam_sensor driver for this sensor existed.
 | Camera | Raspberry Pi HQ Camera, board marked 2018 v1.0; IMX477 at I2C 0x1a, chip ID 0x0477 | ✅ verified |
 | Display | OSOYOO 3.5" DSI V3 (Pi 7" touchscreen protocol: ATTINY-style MCU 0x45, FT5x06 touch 0x38), 800x480 | ✅ verified |
 | Shared I2C | SDA GPIO 7, SCL GPIO 8; camera, display MCU and touch on one bus | ✅ verified |
-| SD card | 8 GB card in the dev kit's slot | ⬜ not brought up |
+| SD card | TF slot, SDMMC slot 0 4-bit (CLK 43, CMD 44, D0-D3 39-42), card VDD from P4 LDO VO4; no card-detect. Tested card: SA08G SDHC 8 GB, 40 MHz, 8.9 MB/s write, 14.3 MB/s read+verify | ✅ verified |
 
 ## What works
 
@@ -32,6 +32,7 @@ The IMX477 driver here is new: no esp_cam_sensor driver for this sensor existed.
 - ISP tuning (`components/esp_cam_sensor_imx477/cfg/imx477_default.json`): black level, AWB range,
   colour matrix and gain limit from Raspberry Pi's libcamera IMX477 tuning. AE uses the full 22.26x
   analog gain.
+- SD card mounted at `/sdcard` at boot with a write/read-back self-test (never formats the card).
 - Test patterns (colour bars, solid R/G/B/white) via `V4L2_CID_TEST_PATTERN`.
 
 ## Layout
