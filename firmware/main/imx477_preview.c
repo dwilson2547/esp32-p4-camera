@@ -258,7 +258,7 @@ void app_main(void)
             if (!can_capture) {
                 ESP_LOGW(TAG, "shutter: no SD card");
             } else if (capture_busy()) {
-                ESP_LOGW(TAG, "shutter: still saving the last photo");
+                ESP_LOGW(TAG, "shutter: shot buffer full, %d photos waiting for the card", capture_pending());
             } else if (capture_frame(cam_buf[b.index], frame_bytes) == ESP_OK) {
                 // White flash for a few frames to confirm the shot.
                 memset(fb, 0xff, fb_size);
@@ -281,7 +281,8 @@ void app_main(void)
         }
         if (can_capture) {
             shutter_state_t st = capture_busy() ? SHUTTER_SAVING
-                               : s_button_down ? SHUTTER_PRESSED : SHUTTER_IDLE;
+                               : s_button_down ? SHUTTER_PRESSED
+                               : capture_pending() > 0 ? SHUTTER_WRITING : SHUTTER_IDLE;
             if ((int)st != shutter_drawn) { ui_draw_shutter(st); shutter_drawn = st; }
         }
 

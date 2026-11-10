@@ -7,7 +7,8 @@
 typedef enum {
     SHUTTER_IDLE,      // white ring, white centre
     SHUTTER_PRESSED,   // finger on it: grey centre
-    SHUTTER_SAVING,    // previous photo still being written: grey ring, dark centre
+    SHUTTER_WRITING,   // ready, photos still going to the card: white, dark dot in the middle
+    SHUTTER_SAVING,    // shot buffer full, wait: grey ring, dark centre
 } shutter_state_t;
 
 // Screen size and where the camera picture sits (its left edge and width), so

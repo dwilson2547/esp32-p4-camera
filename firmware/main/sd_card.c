@@ -3,8 +3,10 @@
 // Wiring from the board schematic (ESP32-P4-Module-DEV-KIT.pdf, "MicroSD Card"
 // block): SDMMC slot 0 IOMUX pins, 4-bit — CLK GPIO43, CMD GPIO44, D0 GPIO39,
 // D1 GPIO40, D2 GPIO41, D3 GPIO42, 51k pull-ups on CMD/D0-D3. Card VDD is
-// SD1_VDD, fed from the P4's on-chip LDO output VO4 (R80 0R; the ESP_3V3
-// option R81 is not fitted). No card-detect line is wired to the P4.
+// SD1_VDD; the schematic text names the on-chip LDO output VO4, ESP_3V3, R80/R81
+// and a PMOS switch on GPIO45 near it (⚠ unverified topology: read from PDF text,
+// not the drawing; parts not located on the board). The firmware powers the
+// card via VO4. No card-detect line is wired to the P4.
 //
 // SD_EXTERNAL_SPI (sd_card.h) selects instead an external SPI microSD breakout
 // on the 40-pin header, powered from the header's 3V3 rather than VO4:

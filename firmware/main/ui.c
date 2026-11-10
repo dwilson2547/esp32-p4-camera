@@ -8,6 +8,7 @@ static const char *TAG = "ui";
 #define BTN_R_OUTER   34
 #define BTN_RING      4
 #define BTN_R_INNER   26
+#define BTN_R_DOT     8      // "still writing" dot
 #define BTN_MARGIN    14     // from the bottom and right screen edges
 #define HIT_SLACK     16
 
@@ -29,7 +30,7 @@ void ui_draw_shutter(shutter_state_t st)
 {
     if (!s_fb) return;
     const uint8_t ring = st == SHUTTER_SAVING ? 0x60 : 0xff;
-    const uint8_t centre = st == SHUTTER_IDLE ? 0xff : st == SHUTTER_PRESSED ? 0x90 : 0x30;
+    const uint8_t centre = (st == SHUTTER_IDLE || st == SHUTTER_WRITING) ? 0xff : st == SHUTTER_PRESSED ? 0x90 : 0x30;
     const int r_ring_in = BTN_R_OUTER - BTN_RING;
     const int y0 = s_cy - BTN_R_OUTER, y1 = s_cy + BTN_R_OUTER;
     for (int y = y0; y <= y1; y++) {
@@ -40,6 +41,7 @@ void ui_draw_shutter(shutter_state_t st)
             if (d2 > BTN_R_OUTER * BTN_R_OUTER) continue;           // outside: leave black
             else if (d2 >= r_ring_in * r_ring_in) v = ring;
             else if (d2 > BTN_R_INNER * BTN_R_INNER) v = 0;          // gap between ring and centre
+            else if (st == SHUTTER_WRITING && d2 <= BTN_R_DOT * BTN_R_DOT) v = 0x30;
             else v = centre;
             memset(row + x * 3, v, 3);   // grey levels only, so RGB/BGR order does not matter
         }
