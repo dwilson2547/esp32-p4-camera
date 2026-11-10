@@ -32,6 +32,10 @@ The IMX477 driver here is new: no esp_cam_sensor driver for this sensor existed.
 - ISP tuning (`components/esp_cam_sensor_imx477/cfg/imx477_default.json`): black level, AWB range,
   colour matrix and gain limit from Raspberry Pi's libcamera IMX477 tuning. AE uses the full 22.26x
   analog gain.
+- Tap the screen to take a photo: hardware JPEG (1920x1520, q90, about 400 KB) saved as
+  `/sdcard/DCIM/IMG_nnnn.JPG`, numbering continued from the card, white flash to confirm. Measured:
+  encode about 47 ms, SD write 91-125 ms in the background; preview keeps running. Colour of the
+  saved JPEGs ⚠ not yet checked on a PC.
 - SD card mounted at `/sdcard` at boot with a write/read-back self-test (never formats the card).
 - Test patterns (colour bars, solid R/G/B/white) via `V4L2_CID_TEST_PATTERN`.
 
