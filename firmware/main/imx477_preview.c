@@ -23,6 +23,7 @@
 #include "esp_video_device.h"
 #include "linux/videodev2.h"
 #include "freertos/semphr.h"
+#include "sd_card.h"
 
 static bool ppa_done_cb(ppa_client_handle_t c, ppa_event_data_t *e, void *user_data)
 {
@@ -77,6 +78,10 @@ void app_main(void)
     memset(fb, 0, fb_size);  // black letterbox around the picture
     ESP_ERROR_CHECK(esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED));
     ESP_LOGI(TAG, "display up: %" PRIu32 "x%" PRIu32 " RGB888", lcd_w, lcd_h);
+
+    // SD card: bring-up check only for now. A missing or unreadable card is
+    // logged and the preview runs anyway.
+    if (sd_card_mount() == ESP_OK) sd_card_selftest();
 
     // Camera
     const esp_video_init_csi_config_t csi_config[] = {{
