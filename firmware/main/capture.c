@@ -53,11 +53,12 @@ static bool write_file(const char *path)
 {
     FILE *f = fopen(path, "wb");
     if (!f) return false;
+    setvbuf(f, NULL, _IONBF, 0);   // sd_card_fwrite's 512-byte pieces must reach FatFs as is
     size_t wr = 0;
     while (wr < s_out_len) {
         size_t n = s_out_len - wr < WRITE_CHUNK ? s_out_len - wr : WRITE_CHUNK;
         memcpy(s_chunk, s_out + wr, n);
-        if (fwrite(s_chunk, 1, n, f) != n) break;
+        if (sd_card_fwrite(s_chunk, n, f) != n) break;
         wr += n;
     }
     bool ok = wr == s_out_len && fflush(f) == 0 && fsync(fileno(f)) == 0;
@@ -75,7 +76,7 @@ static void writer_task(void *arg)
         xSemaphoreTake(s_write_req, portMAX_DELAY);
         if (s_card_test) {
             ESP_LOGI(TAG, "card test during preview...");
-            esp_err_t e = sd_card_selftest();
+            esp_err_t e = sd_card_selftest(8);
             if (e != ESP_OK) { ESP_LOGE(TAG, "card test FAILED"); sd_card_remount(); }
             s_card_test = false;
             s_busy = false;

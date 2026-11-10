@@ -101,11 +101,23 @@ static void fill_random(uint8_t *buf, size_t len, uint32_t x)
     for (size_t i = 0; i < len; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; buf[i] = (uint8_t)x; }
 }
 
-esp_err_t sd_card_selftest(void)
+size_t sd_card_fwrite(const void *buf, size_t len, FILE *f)
+{
+    const uint8_t *p = buf;
+    size_t done = 0;
+    while (done < len) {
+        size_t n = len - done < 512 ? len - done : 512;
+        if (fwrite(p + done, 1, n, f) != n) break;
+        done += n;
+    }
+    return done;
+}
+
+esp_err_t sd_card_selftest(unsigned total_mb)
 {
     if (!s_card) return ESP_ERR_INVALID_STATE;
     const char *path = SD_MOUNT_POINT "/p4test.bin";
-    const size_t chunk = 64 * 1024, total = 8 * 1024 * 1024;   // 8 MB, a dozen photos
+    const size_t chunk = 64 * 1024, total = (size_t)total_mb * 1024 * 1024;
     uint8_t *buf = heap_caps_malloc(chunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     uint8_t *rd = heap_caps_malloc(chunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!buf || !rd) { free(buf); free(rd); return ESP_ERR_NO_MEM; }
@@ -117,9 +129,10 @@ esp_err_t sd_card_selftest(void)
     esp_err_t res = ESP_FAIL;
     FILE *f = fopen(path, "wb");
     if (!f) { ESP_LOGE(TAG, "open %s for write failed", path); goto out; }
+    setvbuf(f, NULL, _IONBF, 0);
     int64_t t0 = esp_timer_get_time();
     for (size_t n = 0; n < total; n += chunk)
-        if ((FILL(n), fwrite(buf, 1, chunk, f)) != chunk) { ESP_LOGE(TAG, "write failed at %u", (unsigned)n); fclose(f); goto out; }
+        if ((FILL(n), sd_card_fwrite(buf, chunk, f)) != chunk) { ESP_LOGE(TAG, "write failed at %u", (unsigned)n); fclose(f); goto out; }
     fflush(f); fsync(fileno(f)); fclose(f);
     int64_t t1 = esp_timer_get_time();
 
@@ -133,8 +146,8 @@ esp_err_t sd_card_selftest(void)
     }
     fclose(f);
     int64_t t2 = esp_timer_get_time();
-    ESP_LOGI(TAG, "selftest OK: 8 MB write %.1f MB/s, read+verify %.1f MB/s",
-             total / ((t1 - t0) / 1e6) / 1e6, total / ((t2 - t1) / 1e6) / 1e6);
+    ESP_LOGI(TAG, "selftest OK: %u MB write %.1f MB/s, read+verify %.1f MB/s",
+             total_mb, total / ((t1 - t0) / 1e6) / 1e6, total / ((t2 - t1) / 1e6) / 1e6);
     res = ESP_OK;
 out:
     remove(path);

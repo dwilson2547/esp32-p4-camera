@@ -111,7 +111,9 @@ void app_main(void)
     // SD card: bring-up check only for now. A missing or unreadable card is
     // logged and the preview runs anyway.
     bool sd_ok = sd_card_mount() == ESP_OK;
-    if (sd_ok) sd_card_selftest();
+    // A failed selftest can leave the card stuck mid-transfer: remount so photos
+    // still work this session.
+    if (sd_ok && sd_card_selftest(2) != ESP_OK) sd_ok = sd_card_remount() == ESP_OK;
     esp_lcd_touch_handle_t touch = esp_lcd_rpi_dsi_get_touch(display);
     if (touch) xTaskCreate(touch_task, "touch", 3072, touch, 4, NULL);
     else ESP_LOGW(TAG, "no touch controller: shutter disabled");
