@@ -40,6 +40,19 @@ static void find_next_number(void)
     s_next_num = max + 1;
 }
 
+static bool write_file(const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return false;
+    size_t wr = fwrite(s_out, 1, s_out_len, f);
+    bool ok = fclose(f) == 0 && wr == s_out_len;
+    if (!ok) {
+        ESP_LOGE(TAG, "writing %s failed (%u of %" PRIu32 " bytes)", path, (unsigned)wr, s_out_len);
+        remove(path);
+    }
+    return ok;
+}
+
 static void writer_task(void *arg)
 {
     for (;;) {
@@ -47,19 +60,17 @@ static void writer_task(void *arg)
         char path[48];
         snprintf(path, sizeof path, DCIM_DIR "/IMG_%04d.JPG", s_next_num);
         int64_t t0 = esp_timer_get_time();
-        FILE *f = fopen(path, "wb");
-        size_t wr = 0;
-        if (f) {
-            wr = fwrite(s_out, 1, s_out_len, f);
-            fclose(f);
+        bool ok = write_file(path);
+        if (!ok && sd_card_remount() == ESP_OK) {
+            // The card stopped answering mid-write; after a remount, try once more.
+            ok = write_file(path);
         }
         int64_t t1 = esp_timer_get_time();
-        if (f && wr == s_out_len) {
+        if (ok) {
             ESP_LOGI(TAG, "saved %s: %" PRIu32 " KB, write %.0f ms", path, s_out_len / 1024, (t1 - t0) / 1e3);
             s_next_num++;
         } else {
-            ESP_LOGE(TAG, "writing %s failed (%u of %" PRIu32 " bytes)", path, (unsigned)wr, s_out_len);
-            remove(path);
+            ESP_LOGE(TAG, "photo lost: SD card not writable");
         }
         s_busy = false;
     }

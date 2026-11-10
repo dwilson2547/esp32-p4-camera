@@ -22,3 +22,8 @@ CONFIG_CAMERA_IMX477_HMIRROR=y
 CONFIG_ESP_IPA_AF_ALGORITHM=n
 
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# The touch panel reports coordinates rotated 180 degrees from the picture
+# (checked on hardware: the bottom-right button fired from the top-left corner).
+CONFIG_ESP_LCD_RPI_DSI_TOUCH_INVERT_X=y
+CONFIG_ESP_LCD_RPI_DSI_TOUCH_INVERT_Y=y

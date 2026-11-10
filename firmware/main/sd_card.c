@@ -25,6 +25,7 @@ static const char *TAG = "sd_card";
 #define SD_LDO_CHAN   4
 
 static sdmmc_card_t *s_card;
+static sd_pwr_ctrl_handle_t s_pwr;
 
 esp_err_t sd_card_mount(void)
 {
@@ -61,6 +62,7 @@ esp_err_t sd_card_mount(void)
         sd_pwr_ctrl_del_on_chip_ldo(pwr);
         return err;
     }
+    s_pwr = pwr;
     sdmmc_card_print_info(stdout, s_card);
 
     uint64_t total = 0, free_b = 0;
@@ -68,6 +70,20 @@ esp_err_t sd_card_mount(void)
         ESP_LOGI(TAG, "mounted at %s: %.2f GB total, %.2f GB free", SD_MOUNT_POINT,
                  total / 1e9, free_b / 1e9);
     return ESP_OK;
+}
+
+esp_err_t sd_card_remount(void)
+{
+    if (s_card) {
+        esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, s_card);
+        s_card = NULL;
+    }
+    if (s_pwr) {
+        sd_pwr_ctrl_del_on_chip_ldo(s_pwr);
+        s_pwr = NULL;
+    }
+    ESP_LOGW(TAG, "remounting the card");
+    return sd_card_mount();
 }
 
 esp_err_t sd_card_selftest(void)
