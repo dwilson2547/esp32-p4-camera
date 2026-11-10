@@ -24,6 +24,26 @@
 #include "linux/videodev2.h"
 #include "freertos/semphr.h"
 #include "sd_card.h"
+#include "capture.h"
+
+// Shutter: any new touch on the screen asks the main loop for a photo.
+static volatile bool s_shot_requested;
+
+static void touch_task(void *arg)
+{
+    esp_lcd_touch_handle_t tp = arg;
+    bool was_down = false;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        esp_lcd_touch_point_data_t pt[1];
+        uint8_t n = 0;
+        if (esp_lcd_touch_read_data(tp) != ESP_OK) continue;
+        esp_lcd_touch_get_data(tp, pt, &n, 1);
+        bool down = n > 0;
+        if (down && !was_down) s_shot_requested = true;
+        was_down = down;
+    }
+}
 
 static bool ppa_done_cb(ppa_client_handle_t c, ppa_event_data_t *e, void *user_data)
 {
@@ -81,7 +101,11 @@ void app_main(void)
 
     // SD card: bring-up check only for now. A missing or unreadable card is
     // logged and the preview runs anyway.
-    if (sd_card_mount() == ESP_OK) sd_card_selftest();
+    bool sd_ok = sd_card_mount() == ESP_OK;
+    if (sd_ok) sd_card_selftest();
+    esp_lcd_touch_handle_t touch = esp_lcd_rpi_dsi_get_touch(display);
+    if (touch) xTaskCreate(touch_task, "touch", 3072, touch, 4, NULL);
+    else ESP_LOGW(TAG, "no touch controller: shutter disabled");
 
     // Camera
     const esp_video_init_csi_config_t csi_config[] = {{
@@ -197,6 +221,10 @@ void app_main(void)
     // leaves the semaphore given; clear it or the first wait would not wait.
     xSemaphoreTake(ppa_sem, 0);
     int in_flight = -1;
+    const bool can_capture = sd_ok && capture_init(cam_w, cam_h) == ESP_OK;
+    if (!can_capture) ESP_LOGW(TAG, "photo capture unavailable (SD card not mounted?)");
+    const size_t frame_bytes = (size_t)cam_w * cam_h * 2;
+    int flash_frames = 0;
     int frames = 0;
     int64_t t0 = esp_timer_get_time(), t_wait = 0, t_ppa_wait = 0;
     for (;;) {
@@ -211,6 +239,30 @@ void app_main(void)
             ioctl(fd, VIDIOC_QBUF, &done);
         }
         t_ppa_wait += esp_timer_get_time() - tb;
+        in_flight = -1;
+
+        if (s_shot_requested) {
+            s_shot_requested = false;
+            if (!can_capture) {
+                ESP_LOGW(TAG, "shutter: no SD card");
+            } else if (capture_busy()) {
+                ESP_LOGW(TAG, "shutter: still saving the last photo");
+            } else if (capture_frame(cam_buf[b.index], frame_bytes) == ESP_OK) {
+                // White flash for a few frames to confirm the shot.
+                memset(fb, 0xff, fb_size);
+                esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+                flash_frames = 4;
+            }
+        }
+        if (flash_frames > 0) {
+            ioctl(fd, VIDIOC_QBUF, &b);
+            if (--flash_frames == 0) {
+                memset(fb, 0, fb_size);   // back to the black letterbox
+                esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+            }
+            continue;
+        }
+
         op.in.buffer = cam_buf[b.index];
         esp_err_t e = ppa_do_scale_rotate_mirror(ppa, &op);
         if (e != ESP_OK) {
