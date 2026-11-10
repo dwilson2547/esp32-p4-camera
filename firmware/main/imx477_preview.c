@@ -30,6 +30,7 @@
 // Shutter button: a touch that starts on it asks the main loop for a photo.
 static volatile bool s_shot_requested;
 static volatile bool s_button_down;
+static volatile bool s_card_test_requested;   // diagnostic: tap the top-left corner
 
 static void touch_task(void *arg)
 {
@@ -46,6 +47,7 @@ static void touch_task(void *arg)
             bool hit = ui_shutter_hit(pt[0].x, pt[0].y);
             ESP_LOGI("touch", "press at (%u,%u)%s", pt[0].x, pt[0].y, hit ? ": shutter" : "");
             if (hit) { s_shot_requested = true; s_button_down = true; }
+            else if (pt[0].x < 150 && pt[0].y < 150) s_card_test_requested = true;
         }
         if (!down) s_button_down = false;
         was_down = down;
@@ -262,6 +264,10 @@ void app_main(void)
                 esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
                 flash_frames = 4;
             }
+        }
+        if (s_card_test_requested) {
+            s_card_test_requested = false;
+            if (can_capture) capture_card_test();
         }
         if (flash_frames > 0) {
             ioctl(fd, VIDIOC_QBUF, &b);

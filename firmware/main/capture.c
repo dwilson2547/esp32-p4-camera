@@ -27,6 +27,7 @@ static size_t s_out_cap;
 static uint32_t s_out_len;
 static int s_next_num = 1;
 static volatile bool s_busy;
+static volatile bool s_card_test;
 static SemaphoreHandle_t s_write_req;
 
 // Continue numbering after the highest IMG_nnnn.JPG already in DCIM.
@@ -72,6 +73,14 @@ static void writer_task(void *arg)
 {
     for (;;) {
         xSemaphoreTake(s_write_req, portMAX_DELAY);
+        if (s_card_test) {
+            ESP_LOGI(TAG, "card test during preview...");
+            esp_err_t e = sd_card_selftest();
+            if (e != ESP_OK) { ESP_LOGE(TAG, "card test FAILED"); sd_card_remount(); }
+            s_card_test = false;
+            s_busy = false;
+            continue;
+        }
         char path[48];
         snprintf(path, sizeof path, DCIM_DIR "/IMG_%04d.JPG", s_next_num);
         int64_t t0 = esp_timer_get_time();
@@ -119,6 +128,14 @@ esp_err_t capture_init(uint32_t width, uint32_t height)
     xTaskCreate(writer_task, "sd_writer", 4096, NULL, 3, NULL);
     ESP_LOGI(TAG, "ready: %" PRIu32 "x%" PRIu32 " JPEG q%d, next file IMG_%04d.JPG", width, height, JPEG_QUALITY, s_next_num);
     return ESP_OK;
+}
+
+void capture_card_test(void)
+{
+    if (capture_busy()) return;
+    s_busy = true;
+    s_card_test = true;
+    xSemaphoreGive(s_write_req);
 }
 
 bool capture_busy(void) { return s_busy || !s_enc; }

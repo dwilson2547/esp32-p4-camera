@@ -16,3 +16,7 @@ bool capture_busy(void);
 // Encode the frame now (blocks for the encode only) and queue it for writing.
 // The frame buffer can be reused as soon as this returns.
 esp_err_t capture_frame(const uint8_t *rgb565, size_t size);
+
+// Run the SD card write/read selftest on the writer task, alongside the live
+// preview (diagnostic). Ignored while a photo is being saved.
+void capture_card_test(void);

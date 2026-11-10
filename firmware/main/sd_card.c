@@ -89,38 +89,46 @@ esp_err_t sd_card_remount(void)
     return sd_card_mount();
 }
 
+// xorshift32 bytes: different for every chunk, repeatable for the read-back check.
+static void fill_random(uint8_t *buf, size_t len, uint32_t x)
+{
+    x |= 1;
+    for (size_t i = 0; i < len; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; buf[i] = (uint8_t)x; }
+}
+
 esp_err_t sd_card_selftest(void)
 {
     if (!s_card) return ESP_ERR_INVALID_STATE;
     const char *path = SD_MOUNT_POINT "/p4test.bin";
-    const size_t chunk = 64 * 1024, total = 4 * 1024 * 1024;   // 4 MB, about a large JPEG or two
+    const size_t chunk = 64 * 1024, total = 8 * 1024 * 1024;   // 8 MB, a dozen photos
     uint8_t *buf = heap_caps_malloc(chunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     uint8_t *rd = heap_caps_malloc(chunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!buf || !rd) { free(buf); free(rd); return ESP_ERR_NO_MEM; }
     // Pseudo-random data: photo writes failed on some content while a simple
     // repeating pattern always passed.
-    uint32_t x = 0x9e3779b9;
-    for (size_t i = 0; i < chunk; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; buf[i] = (uint8_t)x; }
+    const uint32_t seed = 0x9e3779b9 ^ (uint32_t)esp_timer_get_time();
+#define FILL(c) fill_random(buf, chunk, seed + (uint32_t)(c))
 
     esp_err_t res = ESP_FAIL;
     FILE *f = fopen(path, "wb");
     if (!f) { ESP_LOGE(TAG, "open %s for write failed", path); goto out; }
     int64_t t0 = esp_timer_get_time();
     for (size_t n = 0; n < total; n += chunk)
-        if (fwrite(buf, 1, chunk, f) != chunk) { ESP_LOGE(TAG, "write failed at %u", (unsigned)n); fclose(f); goto out; }
+        if ((FILL(n), fwrite(buf, 1, chunk, f)) != chunk) { ESP_LOGE(TAG, "write failed at %u", (unsigned)n); fclose(f); goto out; }
     fflush(f); fsync(fileno(f)); fclose(f);
     int64_t t1 = esp_timer_get_time();
 
     f = fopen(path, "rb");
     if (!f) { ESP_LOGE(TAG, "open %s for read failed", path); goto out; }
     for (size_t n = 0; n < total; n += chunk) {
+        FILL(n);
         if (fread(rd, 1, chunk, f) != chunk || memcmp(rd, buf, chunk) != 0) {
             ESP_LOGE(TAG, "read-back mismatch at %u", (unsigned)n); fclose(f); goto out;
         }
     }
     fclose(f);
     int64_t t2 = esp_timer_get_time();
-    ESP_LOGI(TAG, "selftest OK: 4 MB write %.1f MB/s, read+verify %.1f MB/s",
+    ESP_LOGI(TAG, "selftest OK: 8 MB write %.1f MB/s, read+verify %.1f MB/s",
              total / ((t1 - t0) / 1e6) / 1e6, total / ((t2 - t1) / 1e6) / 1e6);
     res = ESP_OK;
 out:
