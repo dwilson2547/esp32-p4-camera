@@ -39,7 +39,10 @@ esp_err_t sd_card_mount(void)
 
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     host.slot = SDMMC_HOST_SLOT_0;
-    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;   // 40 MHz, 3.3 V signalling
+    // 20 MHz. At 40 MHz some photo writes timed out at a fixed byte offset that
+    // followed the file's content, not its place on the card (retrying the same
+    // data failed at the same offset; a different photo then wrote fine over it).
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
     host.pwr_ctrl_handle = pwr;
 
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -94,7 +97,10 @@ esp_err_t sd_card_selftest(void)
     uint8_t *buf = heap_caps_malloc(chunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     uint8_t *rd = heap_caps_malloc(chunk, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!buf || !rd) { free(buf); free(rd); return ESP_ERR_NO_MEM; }
-    for (size_t i = 0; i < chunk; i++) buf[i] = (uint8_t)(i * 7 + 3);
+    // Pseudo-random data: photo writes failed on some content while a simple
+    // repeating pattern always passed.
+    uint32_t x = 0x9e3779b9;
+    for (size_t i = 0; i < chunk; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; buf[i] = (uint8_t)x; }
 
     esp_err_t res = ESP_FAIL;
     FILE *f = fopen(path, "wb");
