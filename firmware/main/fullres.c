@@ -35,10 +35,15 @@ static void log_psram(const char *when)
              (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
 }
 
-static bool log_block(walker_heap_into_t heap, walker_block_info_t blk, void *user)
+typedef struct { void *ptr; size_t size; bool used; } blk_t;
+static blk_t s_blks[48];
+static int s_nblk;
+
+// Runs with the heap locked: no logging or allocation in here, just record.
+static bool record_block(walker_heap_into_t heap, walker_block_info_t blk, void *user)
 {
-    if (blk.size >= 256 * 1024)
-        ESP_LOGI(TAG, "  %s %p %6u KB", blk.used ? "used" : "free", blk.ptr, (unsigned)(blk.size / 1024));
+    if (blk.size >= 256 * 1024 && s_nblk < (int)(sizeof s_blks / sizeof s_blks[0]))
+        s_blks[s_nblk++] = (blk_t){ blk.ptr, blk.size, blk.used };
     return true;
 }
 
@@ -47,7 +52,11 @@ static bool log_block(walker_heap_into_t heap, walker_block_info_t blk, void *us
 static void log_heap_map(const char *when)
 {
     log_psram(when);
-    heap_caps_walk(MALLOC_CAP_SPIRAM, log_block, NULL);
+    s_nblk = 0;
+    heap_caps_walk(MALLOC_CAP_SPIRAM, record_block, NULL);
+    for (int i = 0; i < s_nblk; i++)
+        ESP_LOGI(TAG, "  %s %p %6u KB", s_blks[i].used ? "used" : "free", s_blks[i].ptr,
+                 (unsigned)(s_blks[i].size / 1024));
 }
 
 static void stop_stream(int fd)
