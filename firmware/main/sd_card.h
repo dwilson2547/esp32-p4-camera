@@ -6,6 +6,11 @@
 
 #define SD_MOUNT_POINT "/sdcard"
 
+// 1: external SPI microSD breakout on the 40-pin header (see sd_card.c for
+// wiring), multi-block writes. 0: the board's own TF slot (SDMMC 4-bit),
+// single-block writes because multi-block ones hang there.
+#define SD_EXTERNAL_SPI 1
+
 // Power the slot, mount the card and log its details. Never formats: a card
 // that does not mount is left untouched and an error is returned.
 esp_err_t sd_card_mount(void);

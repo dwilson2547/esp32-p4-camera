@@ -5,6 +5,11 @@
 // D1 GPIO40, D2 GPIO41, D3 GPIO42, 51k pull-ups on CMD/D0-D3. Card VDD is
 // SD1_VDD, fed from the P4's on-chip LDO output VO4 (R80 0R; the ESP_3V3
 // option R81 is not fitted). No card-detect line is wired to the P4.
+//
+// SD_EXTERNAL_SPI (sd_card.h) selects instead an external SPI microSD breakout
+// on the 40-pin header, powered from the header's 3V3 rather than VO4:
+//   CS GPIO23 (pin 7), CLK GPIO21 (pin 11), MOSI GPIO22 (pin 12),
+//   MISO GPIO20 (pin 13), 3V3 pin 1, GND pin 9.
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -17,6 +22,9 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
+#include "driver/gpio.h"
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
 #include "soc/sdmmc_struct.h"
 #include "sd_card.h"
@@ -27,7 +35,54 @@ static const char *TAG = "sd_card";
 
 static sdmmc_card_t *s_card;
 static sd_pwr_ctrl_handle_t s_pwr;
+static bool s_spi_bus;
 
+static const esp_vfs_fat_sdmmc_mount_config_t s_mc = {
+    .format_if_mount_failed = false,   // never wipe the user's card
+    .max_files = 4,
+    .allocation_unit_size = 16 * 1024,
+};
+
+static void log_mounted(void)
+{
+    sdmmc_card_print_info(stdout, s_card);
+    uint64_t total = 0, free_b = 0;
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &free_b) == ESP_OK)
+        ESP_LOGI(TAG, "mounted at %s: %.2f GB total, %.2f GB free", SD_MOUNT_POINT,
+                 total / 1e9, free_b / 1e9);
+}
+
+#if SD_EXTERNAL_SPI
+esp_err_t sd_card_mount(void)
+{
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI2_HOST;
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;   // 20 MHz: jumper wires, start safe
+    if (!s_spi_bus) {
+        spi_bus_config_t bus = {
+            .mosi_io_num = GPIO_NUM_22, .miso_io_num = GPIO_NUM_20, .sclk_io_num = GPIO_NUM_21,
+            .quadwp_io_num = -1, .quadhd_io_num = -1,
+            .max_transfer_sz = 64 * 1024,
+        };
+        esp_err_t e = spi_bus_initialize(SPI2_HOST, &bus, SDSPI_DEFAULT_DMA);
+        if (e != ESP_OK) { ESP_LOGE(TAG, "SPI bus: %s", esp_err_to_name(e)); return e; }
+        // The card's MISO floats between replies; the breakout may have no pull-ups.
+        gpio_pullup_en(GPIO_NUM_20); gpio_pullup_en(GPIO_NUM_22); gpio_pullup_en(GPIO_NUM_23);
+        s_spi_bus = true;
+    }
+    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot.gpio_cs = GPIO_NUM_23;
+    slot.host_id = SPI2_HOST;
+    esp_err_t err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot, &s_mc, &s_card);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "external SPI card: %s (wiring? card inserted? FAT?)", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "external SPI slot");
+    log_mounted();
+    return ESP_OK;
+}
+#else
 esp_err_t sd_card_mount(void)
 {
     sd_pwr_ctrl_ldo_config_t ldo = { .ldo_chan_id = SD_LDO_CHAN };
@@ -51,12 +106,7 @@ esp_err_t sd_card_mount(void)
     slot.d0 = GPIO_NUM_39;  slot.d1 = GPIO_NUM_40; slot.d2 = GPIO_NUM_41; slot.d3 = GPIO_NUM_42;
     slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;   // board has 51k; harmless extra
 
-    esp_vfs_fat_sdmmc_mount_config_t mc = {
-        .format_if_mount_failed = false,   // never wipe the user's card
-        .max_files = 4,
-        .allocation_unit_size = 16 * 1024,
-    };
-    err = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mc, &s_card);
+    err = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &s_mc, &s_card);
     if (err != ESP_OK) {
         if (err == ESP_FAIL)
             ESP_LOGE(TAG, "card found but no FAT filesystem mounted (not formatting it)");
@@ -71,14 +121,10 @@ esp_err_t sd_card_mount(void)
     // P4 to 16-byte bursts (field value 3). Multi-sector writes here time out with
     // the card left waiting for data, so set it the same way.
     SDMMC.fifoth.dma_multiple_transaction_size = 3;
-    sdmmc_card_print_info(stdout, s_card);
-
-    uint64_t total = 0, free_b = 0;
-    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &free_b) == ESP_OK)
-        ESP_LOGI(TAG, "mounted at %s: %.2f GB total, %.2f GB free", SD_MOUNT_POINT,
-                 total / 1e9, free_b / 1e9);
+    log_mounted();
     return ESP_OK;
 }
+#endif
 
 esp_err_t sd_card_remount(void)
 {
@@ -101,7 +147,7 @@ static void fill_random(uint8_t *buf, size_t len, uint32_t x)
     for (size_t i = 0; i < len; i++) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; buf[i] = (uint8_t)x; }
 }
 
-static size_t s_piece = 512;
+static size_t s_piece = SD_EXTERNAL_SPI ? 64 * 1024 : 512;
 void sd_card_set_write_piece(size_t bytes) { s_piece = bytes < 512 ? 512 : bytes; }
 size_t sd_card_write_piece(void) { return s_piece; }
 
