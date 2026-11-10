@@ -35,6 +35,21 @@ static void log_psram(const char *when)
              (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
 }
 
+static bool log_block(walker_heap_into_t heap, walker_block_info_t blk, void *user)
+{
+    if (blk.size >= 256 * 1024)
+        ESP_LOGI(TAG, "  %s %p %6u KB", blk.used ? "used" : "free", blk.ptr, (unsigned)(blk.size / 1024));
+    return true;
+}
+
+// Every PSRAM block of 256 KB or more, in address order: shows what splits
+// the free space when the full-res buffer does not fit.
+static void log_heap_map(const char *when)
+{
+    log_psram(when);
+    heap_caps_walk(MALLOC_CAP_SPIRAM, log_block, NULL);
+}
+
 static void stop_stream(int fd)
 {
     xioctl(fd, VIDIOC_STREAMOFF, (void *)&s_type, "STREAMOFF");
@@ -100,7 +115,9 @@ esp_err_t fullres_capture(int fd, uint8_t *cam_buf[], int count, uint32_t prev_w
 {
     int64_t t0 = esp_timer_get_time();
     stop_stream(fd);
-    log_psram("preview stopped");
+    log_heap_map("preview stopped");
+    capture_release_encoder();
+    log_heap_map("JPEG buffer freed too");
 
     uint8_t *raw = NULL;
     uint32_t raw_len = 0;
@@ -135,6 +152,7 @@ esp_err_t fullres_capture(int fd, uint8_t *cam_buf[], int count, uint32_t prev_w
     int64_t t_back0 = esp_timer_get_time();
     bool back = start_stream(fd, SENSOR_FMT_PREVIEW, prev_w, prev_h, V4L2_PIX_FMT_RGB565, cam_buf, NULL, count);
     int64_t t_back = esp_timer_get_time();
+    if (back) capture_restore_encoder();
     if (t_f2) {
         ESP_LOGI(TAG, "timings: stop preview + mode switch + stream on %.0f ms, first frame %.0f ms, "
                  "second frame %.0f ms later, card write %.0f ms, back to preview %.0f ms; total %.1f s",

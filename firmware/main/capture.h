@@ -30,3 +30,8 @@ void capture_card_test(void);
 // until it is on the card (same numbering as the JPEGs). Refused while photos
 // are still queued for the writer task.
 esp_err_t capture_save_raw(const uint8_t *data, size_t len);
+
+// Free the encoder's 3 MB output buffer (the shutter reports busy meanwhile)
+// so a full-res frame has room, then allocate it again afterwards.
+void capture_release_encoder(void);
+esp_err_t capture_restore_encoder(void);

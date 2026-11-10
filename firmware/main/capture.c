@@ -175,7 +175,7 @@ void capture_card_test(void)
 
 bool capture_busy(void)
 {
-    if (!s_enc || !s_queue) return true;
+    if (!s_enc || !s_queue || !s_out) return true;
     // Room for another shot about as big as the last one (with margin), and a queue slot.
     return s_queued_bytes + s_last_len + s_last_len / 2 > s_budget || uxQueueSpacesAvailable(s_queue) == 0;
 }
@@ -236,5 +236,24 @@ esp_err_t capture_save_raw(const uint8_t *data, size_t len)
     ESP_LOGI(TAG, "saved %s: %u KB, write %.0f ms (%.2f MB/s)", path, (unsigned)(len / 1024), ms,
              len / 1048576.0f / (ms / 1000.0f));
     s_next_num++;
+    return ESP_OK;
+}
+
+void capture_release_encoder(void)
+{
+    free(s_out);
+    s_out = NULL;
+    s_out_cap = 0;
+}
+
+esp_err_t capture_restore_encoder(void)
+{
+    if (s_out) return ESP_OK;
+    jpeg_encode_memory_alloc_cfg_t mc = { .buffer_direction = JPEG_ENC_ALLOC_OUTPUT_BUFFER };
+    s_out = jpeg_alloc_encoder_mem(JPEG_OUT_MAX, &mc, &s_out_cap);
+    if (!s_out) {
+        ESP_LOGE(TAG, "no room for the JPEG buffer again; shutter off until reboot");
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
