@@ -8,7 +8,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_err.h"
@@ -33,6 +33,17 @@ static volatile bool s_shot_requested;
 static volatile bool s_button_down;
 static volatile bool s_card_test_requested;   // diagnostic: tap the top-left corner
 static volatile bool s_fullres_requested;     // spike: tap the top-right corner for a 12 MP raw frame
+
+static uint8_t **s_cam_buf;   // camera buffers (USERPTR), set up in app_main
+static size_t s_slot;
+
+// Hand camera buffer idx back to the driver.
+static int qbuf(int fd, int idx)
+{
+    struct v4l2_buffer b = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_USERPTR, .index = idx,
+                             .m.userptr = (unsigned long)s_cam_buf[idx], .length = s_slot };
+    return ioctl(fd, VIDIOC_QBUF, &b);
+}
 
 static void touch_task(void *arg)
 {
@@ -143,15 +154,24 @@ void app_main(void)
         return;
     }
 
-    struct v4l2_requestbuffers req = { .count = BUFFER_COUNT, .type = type, .memory = V4L2_MEMORY_MMAP };
-    ESP_ERROR_CHECK(ioctl(fd, VIDIOC_REQBUFS, &req) == 0 ? ESP_OK : ESP_FAIL);
+    // All camera frames live in one block we own and never free (USERPTR):
+    // the preview's buffers side by side, and the same space holds one
+    // full-res raw frame while the preview is stopped. Driver-allocated (MMAP)
+    // buffers fragmented PSRAM once freed, so the raw frame never fit.
+    const size_t slot = FULLRES_ALIGN((size_t)cam_w * cam_h * 2);
+    size_t arena_len = slot * BUFFER_COUNT;
+    if (arena_len < FULLRES_BUF_BYTES) arena_len = FULLRES_BUF_BYTES;
+    uint8_t *arena = heap_caps_aligned_alloc(FULLRES_BUF_ALIGN, arena_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!arena) { ESP_LOGE(TAG, "no room for %u KB of camera buffers; stopping", (unsigned)(arena_len / 1024)); return; }
     uint8_t *cam_buf[BUFFER_COUNT];
-    for (int i = 0; i < BUFFER_COUNT; i++) {
-        struct v4l2_buffer b = { .type = type, .memory = V4L2_MEMORY_MMAP, .index = i };
-        ESP_ERROR_CHECK(ioctl(fd, VIDIOC_QUERYBUF, &b) == 0 ? ESP_OK : ESP_FAIL);
-        cam_buf[i] = mmap(NULL, b.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, b.m.offset);
-        ESP_ERROR_CHECK(ioctl(fd, VIDIOC_QBUF, &b) == 0 ? ESP_OK : ESP_FAIL);
-    }
+    for (int i = 0; i < BUFFER_COUNT; i++) cam_buf[i] = arena + i * slot;
+    s_cam_buf = cam_buf;
+    s_slot = slot;
+    struct v4l2_requestbuffers req = { .count = BUFFER_COUNT, .type = type, .memory = V4L2_MEMORY_USERPTR };
+    ESP_ERROR_CHECK(ioctl(fd, VIDIOC_REQBUFS, &req) == 0 ? ESP_OK : ESP_FAIL);
+    for (int i = 0; i < BUFFER_COUNT; i++) ESP_ERROR_CHECK(qbuf(fd, i) == 0 ? ESP_OK : ESP_FAIL);
+    ESP_LOGI(TAG, "camera buffers: %d x %u KB in one %u KB block", BUFFER_COUNT, (unsigned)(slot / 1024),
+             (unsigned)(arena_len / 1024));
     ESP_ERROR_CHECK(ioctl(fd, VIDIOC_STREAMON, &type) == 0 ? ESP_OK : ESP_FAIL);
 
     // Fit the camera frame inside the panel. PPA scale factors have 1/16 steps,
@@ -181,19 +201,19 @@ void app_main(void)
 
     // --- Startup benchmark on one real frame -------------------------------
     const int type_ = type; (void)type_;
-    struct v4l2_buffer b0 = { .type = type, .memory = V4L2_MEMORY_MMAP };
+    struct v4l2_buffer b0 = { .type = type, .memory = V4L2_MEMORY_USERPTR };
     ESP_ERROR_CHECK(ioctl(fd, VIDIOC_DQBUF, &b0) == 0 ? ESP_OK : ESP_FAIL);
     op.in.buffer = cam_buf[b0.index];
     // Sensor frame period, for choosing a row skip that keeps up.
-    struct v4l2_buffer bt = { .type = type, .memory = V4L2_MEMORY_MMAP };
+    struct v4l2_buffer bt = { .type = type, .memory = V4L2_MEMORY_USERPTR };
     ESP_ERROR_CHECK(ioctl(fd, VIDIOC_DQBUF, &bt) == 0 ? ESP_OK : ESP_FAIL);
     int64_t tq = esp_timer_get_time();
-    ioctl(fd, VIDIOC_QBUF, &bt);
+    qbuf(fd, bt.index);
     ESP_ERROR_CHECK(ioctl(fd, VIDIOC_DQBUF, &bt) == 0 ? ESP_OK : ESP_FAIL);
-    ioctl(fd, VIDIOC_QBUF, &bt);
+    qbuf(fd, bt.index);
     ESP_ERROR_CHECK(ioctl(fd, VIDIOC_DQBUF, &bt) == 0 ? ESP_OK : ESP_FAIL);
     const float frame_ms = (esp_timer_get_time() - tq) / 2e3f;
-    ioctl(fd, VIDIOC_QBUF, &bt);
+    qbuf(fd, bt.index);
     ESP_LOGI(TAG, "sensor frame period %.1f ms (%.1f fps)", frame_ms, 1000.0f / frame_ms);
 
     float skip_ms[5] = { 0 };
@@ -213,7 +233,7 @@ void app_main(void)
         ESP_LOGI(TAG, "bench: quarter block %" PRIu32 "x%" PRIu32 " -> %.1f ms", op.in.block_w, op.in.block_h,
                  (esp_timer_get_time() - t) / 3e3f);
     }
-    ioctl(fd, VIDIOC_QBUF, &b0);
+    qbuf(fd, b0.index);
 
     // Least skipping that still fits in one sensor frame (with 2 ms margin).
     uint32_t skip = 4;
@@ -243,15 +263,14 @@ void app_main(void)
     int frames = 0;
     int64_t t0 = esp_timer_get_time(), t_wait = 0, t_ppa_wait = 0;
     for (;;) {
-        struct v4l2_buffer b = { .type = type, .memory = V4L2_MEMORY_MMAP };
+        struct v4l2_buffer b = { .type = type, .memory = V4L2_MEMORY_USERPTR };
         int64_t ta = esp_timer_get_time();
         if (ioctl(fd, VIDIOC_DQBUF, &b) != 0) { ESP_LOGE(TAG, "DQBUF failed"); vTaskDelay(pdMS_TO_TICKS(100)); continue; }
         int64_t tb = esp_timer_get_time();
         t_wait += tb - ta;
         if (in_flight >= 0) {
             xSemaphoreTake(ppa_sem, portMAX_DELAY);
-            struct v4l2_buffer done = { .type = type, .memory = V4L2_MEMORY_MMAP, .index = in_flight };
-            ioctl(fd, VIDIOC_QBUF, &done);
+            qbuf(fd, in_flight);
         }
         t_ppa_wait += esp_timer_get_time() - tb;
         in_flight = -1;
@@ -284,7 +303,7 @@ void app_main(void)
                 // Nothing is with the PPA (waited for above) and b is ours; the
                 // capture tears the whole stream down and builds it again.
                 ui_draw_shutter(SHUTTER_SAVING);
-                if (fullres_capture(fd, cam_buf, BUFFER_COUNT, cam_w, cam_h) != ESP_OK) {
+                if (fullres_capture(fd, arena, arena_len, cam_buf, BUFFER_COUNT, slot, cam_w, cam_h) != ESP_OK) {
                     ESP_LOGE(TAG, "preview lost after full-res capture; stopping");
                     return;
                 }
@@ -293,7 +312,7 @@ void app_main(void)
             }
         }
         if (flash_frames > 0) {
-            ioctl(fd, VIDIOC_QBUF, &b);
+            qbuf(fd, b.index);
             if (--flash_frames == 0) {
                 memset(fb, 0, fb_size);   // back to the black letterbox
                 esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
@@ -313,7 +332,7 @@ void app_main(void)
         if (e != ESP_OK) {
             // Nothing is in flight now (the previous job was waited for above).
             ESP_LOGE(TAG, "PPA failed: %s", esp_err_to_name(e));
-            ioctl(fd, VIDIOC_QBUF, &b);
+            qbuf(fd, b.index);
             in_flight = -1;
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;

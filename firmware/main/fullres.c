@@ -2,7 +2,6 @@
 #include <string.h>
 #include <inttypes.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -15,9 +14,9 @@ static const char *TAG = "fullres";
 
 #define SENSOR_FMT_PREVIEW  0   // imx477 format table index: 1920x1520 binned
 #define SENSOR_FMT_FULL     1   // 4056x3040 unbinned
-#define FULL_W              4056
-#define FULL_H              3040
-#define FULL_BYTES          ((size_t)FULL_W * FULL_H * 10 / 8)   // MIPI RAW10: 4 px in 5 bytes
+#define FULL_W              FULLRES_W
+#define FULL_H              FULLRES_H
+#define FULL_BYTES          FULLRES_BYTES
 
 static const int s_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
@@ -35,40 +34,24 @@ static void log_psram(const char *when)
              (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
 }
 
-typedef struct { void *ptr; size_t size; bool used; } blk_t;
-static blk_t s_blks[48];
-static int s_nblk;
-
-// Runs with the heap locked: no logging or allocation in here, just record.
-static bool record_block(walker_heap_into_t heap, walker_block_info_t blk, void *user)
-{
-    if (blk.size >= 256 * 1024 && s_nblk < (int)(sizeof s_blks / sizeof s_blks[0]))
-        s_blks[s_nblk++] = (blk_t){ blk.ptr, blk.size, blk.used };
-    return true;
-}
-
-// Every PSRAM block of 256 KB or more, in address order: shows what splits
-// the free space when the full-res buffer does not fit.
-static void log_heap_map(const char *when)
-{
-    log_psram(when);
-    s_nblk = 0;
-    heap_caps_walk(MALLOC_CAP_SPIRAM, record_block, NULL);
-    for (int i = 0; i < s_nblk; i++)
-        ESP_LOGI(TAG, "  %s %p %6u KB", s_blks[i].used ? "used" : "free", s_blks[i].ptr,
-                 (unsigned)(s_blks[i].size / 1024));
-}
-
 static void stop_stream(int fd)
 {
     xioctl(fd, VIDIOC_STREAMOFF, (void *)&s_type, "STREAMOFF");
-    struct v4l2_requestbuffers req = { .count = 0, .type = s_type, .memory = V4L2_MEMORY_MMAP };
+    struct v4l2_requestbuffers req = { .count = 0, .type = s_type, .memory = V4L2_MEMORY_USERPTR };
     xioctl(fd, VIDIOC_REQBUFS, &req, "REQBUFS 0");
 }
 
-// Sensor mode, capture format and count MMAP buffers, all queued, streaming.
+static bool qbuf(int fd, int idx, uint8_t *const buf[], size_t len)
+{
+    struct v4l2_buffer b = { .type = s_type, .memory = V4L2_MEMORY_USERPTR, .index = idx,
+                             .m.userptr = (unsigned long)buf[idx], .length = len };
+    return xioctl(fd, VIDIOC_QBUF, &b, "QBUF");
+}
+
+// Sensor mode, capture format and count USERPTR buffers of len bytes, all
+// queued, streaming.
 static bool start_stream(int fd, uint32_t sensor_idx, uint32_t w, uint32_t h, uint32_t fourcc,
-                         uint8_t *buf[], uint32_t len[], int count)
+                         uint8_t *const buf[], size_t len, int count)
 {
     struct v4l2_sensor_format_enum e = { .index = sensor_idx };
     if (!xioctl(fd, VIDIOC_ENUM_SENSOR_FMT, &e, "ENUM_SENSOR_FMT")) return false;
@@ -78,14 +61,10 @@ static bool start_stream(int fd, uint32_t sensor_idx, uint32_t w, uint32_t h, ui
     f.fmt.pix.height = h;
     f.fmt.pix.pixelformat = fourcc;
     if (!xioctl(fd, VIDIOC_S_FMT, &f, "S_FMT")) return false;
-    struct v4l2_requestbuffers req = { .count = count, .type = s_type, .memory = V4L2_MEMORY_MMAP };
+    struct v4l2_requestbuffers req = { .count = count, .type = s_type, .memory = V4L2_MEMORY_USERPTR };
     if (!xioctl(fd, VIDIOC_REQBUFS, &req, "REQBUFS")) return false;
     for (int i = 0; i < count; i++) {
-        struct v4l2_buffer b = { .type = s_type, .memory = V4L2_MEMORY_MMAP, .index = i };
-        if (!xioctl(fd, VIDIOC_QUERYBUF, &b, "QUERYBUF")) return false;
-        buf[i] = mmap(NULL, b.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, b.m.offset);
-        if (len) len[i] = b.length;
-        if (!xioctl(fd, VIDIOC_QBUF, &b, "QBUF")) return false;
+        if (!qbuf(fd, i, buf, len)) return false;
     }
     return xioctl(fd, VIDIOC_STREAMON, (void *)&s_type, "STREAMON");
 }
@@ -120,34 +99,35 @@ static void log_stats(const uint8_t *p, size_t used)
     }
 }
 
-esp_err_t fullres_capture(int fd, uint8_t *cam_buf[], int count, uint32_t prev_w, uint32_t prev_h)
+esp_err_t fullres_capture(int fd, uint8_t *arena, size_t arena_len, uint8_t *const cam_buf[], int count,
+                          size_t slot, uint32_t prev_w, uint32_t prev_h)
 {
     int64_t t0 = esp_timer_get_time();
     stop_stream(fd);
-    log_heap_map("preview stopped");
-    capture_release_encoder();
-    log_heap_map("JPEG buffer freed too");
+    log_psram("preview stopped");
 
-    uint8_t *raw = NULL;
-    uint32_t raw_len = 0;
+    uint8_t *const raw_buf[1] = { arena };
+    uint8_t *raw = arena;
+    const size_t raw_len = arena_len;
     int64_t t_on = 0, t_f1 = 0, t_f2 = 0, t_saved = 0;
-    bool ok = start_stream(fd, SENSOR_FMT_FULL, FULL_W, FULL_H, V4L2_PIX_FMT_SBGGR10, &raw, &raw_len, 1);
+    bool ok = arena_len >= FULLRES_BUF_BYTES &&
+              start_stream(fd, SENSOR_FMT_FULL, FULL_W, FULL_H, V4L2_PIX_FMT_SBGGR10, raw_buf, raw_len, 1);
     t_on = esp_timer_get_time();
     if (ok) {
         // The first frame after stream-on is thrown away (it can be partly
         // exposed with the old settings); the second one is kept.
-        struct v4l2_buffer b = { .type = s_type, .memory = V4L2_MEMORY_MMAP };
+        struct v4l2_buffer b = { .type = s_type, .memory = V4L2_MEMORY_USERPTR };
         ok = xioctl(fd, VIDIOC_DQBUF, &b, "DQBUF 1");
         t_f1 = esp_timer_get_time();
         if (ok) {
             ESP_LOGI(TAG, "frame 1: %" PRIu32 " bytes", b.bytesused);
-            ok = xioctl(fd, VIDIOC_QBUF, &b, "QBUF") && xioctl(fd, VIDIOC_DQBUF, &b, "DQBUF 2");
+            ok = qbuf(fd, 0, raw_buf, raw_len) && xioctl(fd, VIDIOC_DQBUF, &b, "DQBUF 2");
             t_f2 = esp_timer_get_time();
         }
         xioctl(fd, VIDIOC_STREAMOFF, (void *)&s_type, "STREAMOFF");
         if (ok) {
-            ESP_LOGI(TAG, "frame 2: %" PRIu32 " bytes (buffer %" PRIu32 ", expected %u)",
-                     b.bytesused, raw_len, (unsigned)FULL_BYTES);
+            ESP_LOGI(TAG, "frame 2: %" PRIu32 " bytes (buffer %u, expected %u)",
+                     b.bytesused, (unsigned)raw_len, (unsigned)FULL_BYTES);
             size_t used = b.bytesused && b.bytesused < FULL_BYTES ? b.bytesused : FULL_BYTES;
             if (raw_len < used) used = raw_len;
             log_stats(raw, used);
@@ -155,13 +135,12 @@ esp_err_t fullres_capture(int fd, uint8_t *cam_buf[], int count, uint32_t prev_w
             t_saved = esp_timer_get_time();
         }
     }
-    struct v4l2_requestbuffers req = { .count = 0, .type = s_type, .memory = V4L2_MEMORY_MMAP };
+    struct v4l2_requestbuffers req = { .count = 0, .type = s_type, .memory = V4L2_MEMORY_USERPTR };
     xioctl(fd, VIDIOC_REQBUFS, &req, "REQBUFS 0");
 
     int64_t t_back0 = esp_timer_get_time();
-    bool back = start_stream(fd, SENSOR_FMT_PREVIEW, prev_w, prev_h, V4L2_PIX_FMT_RGB565, cam_buf, NULL, count);
+    bool back = start_stream(fd, SENSOR_FMT_PREVIEW, prev_w, prev_h, V4L2_PIX_FMT_RGB565, cam_buf, slot, count);
     int64_t t_back = esp_timer_get_time();
-    if (back) capture_restore_encoder();
     if (t_f2) {
         ESP_LOGI(TAG, "timings: stop preview + mode switch + stream on %.0f ms, first frame %.0f ms, "
                  "second frame %.0f ms later, card write %.0f ms, back to preview %.0f ms; total %.1f s",
