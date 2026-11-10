@@ -25,9 +25,11 @@
 #include "freertos/semphr.h"
 #include "sd_card.h"
 #include "capture.h"
+#include "ui.h"
 
-// Shutter: any new touch on the screen asks the main loop for a photo.
+// Shutter button: a touch that starts on it asks the main loop for a photo.
 static volatile bool s_shot_requested;
+static volatile bool s_button_down;
 
 static void touch_task(void *arg)
 {
@@ -40,7 +42,12 @@ static void touch_task(void *arg)
         if (esp_lcd_touch_read_data(tp) != ESP_OK) continue;
         esp_lcd_touch_get_data(tp, pt, &n, 1);
         bool down = n > 0;
-        if (down && !was_down) s_shot_requested = true;
+        if (down && !was_down) {
+            bool hit = ui_shutter_hit(pt[0].x, pt[0].y);
+            ESP_LOGI("touch", "press at (%u,%u)%s", pt[0].x, pt[0].y, hit ? ": shutter" : "");
+            if (hit) { s_shot_requested = true; s_button_down = true; }
+        }
+        if (!down) s_button_down = false;
         was_down = down;
     }
 }
@@ -210,6 +217,7 @@ void app_main(void)
     set_row_skip(&op, cam_w, cam_h, skip, s, out_h);
     memset(fb, 0, fb_size);
     esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    ui_init(fb, lcd_w, lcd_h, (lcd_w - out_w) / 2, out_w);
     ESP_LOGI(TAG, "preview: every %" PRIu32 " row(s), %" PRIu32 " rows in, scale %.4fx%.4f",
              skip, op.in.block_h, op.scale_x, op.scale_y);
 
@@ -225,6 +233,7 @@ void app_main(void)
     if (!can_capture) ESP_LOGW(TAG, "photo capture unavailable (SD card not mounted?)");
     const size_t frame_bytes = (size_t)cam_w * cam_h * 2;
     int flash_frames = 0;
+    int shutter_drawn = -1;   // state last drawn; -1 forces a redraw
     int frames = 0;
     int64_t t0 = esp_timer_get_time(), t_wait = 0, t_ppa_wait = 0;
     for (;;) {
@@ -259,8 +268,14 @@ void app_main(void)
             if (--flash_frames == 0) {
                 memset(fb, 0, fb_size);   // back to the black letterbox
                 esp_cache_msync(fb, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+                shutter_drawn = -1;
             }
             continue;
+        }
+        if (can_capture) {
+            shutter_state_t st = capture_busy() ? SHUTTER_SAVING
+                               : s_button_down ? SHUTTER_PRESSED : SHUTTER_IDLE;
+            if ((int)st != shutter_drawn) { ui_draw_shutter(st); shutter_drawn = st; }
         }
 
         op.in.buffer = cam_buf[b.index];
