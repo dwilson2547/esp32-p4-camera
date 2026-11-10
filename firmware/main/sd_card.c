@@ -57,7 +57,8 @@ esp_err_t sd_card_mount(void)
 {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
-    host.max_freq_khz = SDMMC_FREQ_DEFAULT;   // 20 MHz: jumper wires, start safe
+    // 40 MHz. 20 MHz passed 24 MB of multi-block writes over the jumpers (1.2 MB/s).
+    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED;
     if (!s_spi_bus) {
         spi_bus_config_t bus = {
             .mosi_io_num = GPIO_NUM_22, .miso_io_num = GPIO_NUM_20, .sclk_io_num = GPIO_NUM_21,
