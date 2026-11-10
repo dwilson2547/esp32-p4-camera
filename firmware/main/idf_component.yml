@@ -1,0 +1,6 @@
+dependencies:
+  idf: '>=6.0'
+  espressif/esp_video: ^2.4
+  esp_cam_sensor_imx477:      # this repo, GPL-2.0 (register tables from Linux)
+    path: '../../components/esp_cam_sensor_imx477'
+  kurozz/esp_lcd_rpi_dsi: '0.1.0'   # GPL-2.0, Pi DSI touchscreen + clones

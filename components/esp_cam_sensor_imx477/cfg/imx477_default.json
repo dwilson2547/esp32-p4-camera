@@ -1,0 +1,306 @@
+{
+    "version": 1,
+    "IMX477": {
+        "adn": {
+            "//": "Inherited from an IMX219 tuning; not re-measured on the IMX477.",
+            "bf": [
+                {
+                    "gain": 1,
+                    "param": {
+                        "level": 3,
+                        "matrix": [
+                            1,
+                            2,
+                            1,
+                            2,
+                            4,
+                            2,
+                            1,
+                            2,
+                            1
+                        ]
+                    }
+                },
+                {
+                    "gain": 4,
+                    "param": {
+                        "level": 6,
+                        "matrix": [
+                            1,
+                            2,
+                            1,
+                            2,
+                            4,
+                            2,
+                            1,
+                            2,
+                            1
+                        ]
+                    }
+                },
+                {
+                    "gain": 8,
+                    "param": {
+                        "level": 9,
+                        "matrix": [
+                            1,
+                            2,
+                            1,
+                            2,
+                            4,
+                            2,
+                            1,
+                            2,
+                            1
+                        ]
+                    }
+                }
+            ]
+        },
+        "agc": {
+            "exposure": {
+                "frame_delay": 2,
+                "adjust_delay": 0
+            },
+            "gain": {
+                "min_step": 0.0001,
+                "frame_delay": 2,
+                "max": 22.26,
+                "//max": "22.26x: IMX477 analog gain 1024/(1024-code), code capped at 978 (driver gain menu ends at 22261 milli-units)."
+            },
+            "//anti_flicker": "60 Hz mains. MEASURED consequence on the 1640x1232 mode (2026-09-01): the AE only picks exposures that are whole multiples of 1/120 s, which at this mode's 18.904 us line time is 440.8 lines - so the legal exposures are 441, 882, 1322 and 1763 lines. The fourth is 1763, four lines ABOVE the 1759 ceiling (VTS 1763 - 4), so it can never be taken and AE pins at 1322 lines with a third of a stop it is not allowed to use. Combined with this sensor's 10.667x gain ceiling that is what a dim-room frame runs into. Setting mode to off recovers the third of a stop at the cost of banding under mains lighting; raising VTS recovers it at the cost of frame rate. Neither is the right default.",
+            "anti_flicker": {
+                "mode": "full",
+                "ac_freq": 60
+            },
+            "f_n0": 1,
+            "luma_adjust": {
+                "target_low": 50,
+                "target_high": 150,
+                "target": 100,
+                "low_threshold": 30,
+                "low_regions": 10,
+                "high_threshold": 220,
+                "high_regions": 10,
+                "weight": [
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    2,
+                    2,
+                    2,
+                    1,
+                    1,
+                    2,
+                    4,
+                    2,
+                    1,
+                    1,
+                    2,
+                    2,
+                    2,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "mode": "low_light_priority",
+            "high_light_priority": {
+                "low_threshold": 120,
+                "high_threshold": 180,
+                "weight_offset": 5,
+                "luma_offset": 5
+            },
+            "low_light_priority": {
+                "low_threshold": 40,
+                "high_threshold": 80,
+                "weight_offset": 10,
+                "luma_offset": 10
+            }
+        },
+        "aen": {
+            "gamma": {
+                "use_gamma_param": true,
+                "luma_env": "ae.luma.avg",
+                "luma_min_step": 16.0,
+                "table": [
+                    {
+                        "luma": 71.1,
+                        "gamma_param": 0.72
+                    }
+                ]
+            },
+            "sharpen": [
+                {
+                    "gain": 1,
+                    "param": {
+                        "h_thresh": 56,
+                        "l_thresh": 10,
+                        "h_coeff": 0.4,
+                        "m_coeff": 0.6,
+                        "matrix": [
+                            1,
+                            2,
+                            1,
+                            2,
+                            2,
+                            2,
+                            1,
+                            2,
+                            1
+                        ]
+                    }
+                },
+                {
+                    "gain": 8,
+                    "param": {
+                        "h_thresh": 80,
+                        "l_thresh": 24,
+                        "h_coeff": 0.25,
+                        "m_coeff": 0.35,
+                        "matrix": [
+                            1,
+                            2,
+                            1,
+                            2,
+                            2,
+                            2,
+                            1,
+                            2,
+                            1
+                        ]
+                    }
+                }
+            ],
+            "contrast": [
+                {
+                    "gain": 1,
+                    "value": 130
+                }
+            ]
+        },
+        "ian": {
+            "luma": {
+                "ae": {
+                    "weight": [
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        2,
+                        2,
+                        2,
+                        1,
+                        1,
+                        2,
+                        4,
+                        2,
+                        1,
+                        1,
+                        2,
+                        2,
+                        2,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1,
+                        1
+                    ]
+                }
+            }
+        },
+        "awb": {
+            "//range": "rg/bg box covers the IMX477 ct_curve from Raspberry Pi libcamera src/ipa/rpi/vc4/data/imx477.json (BSD-2-Clause), fetched 2026-11-09 (2360 K: rg 0.601 bg 0.309 ... 9505 K: rg 0.252 bg 0.786) with margin on the low side. Upper bounds stay 1.2 because it is unverified whether the stats are sampled before or after the WB gains (after = neutrals near 1.0). green 40-230 so ordinary-brightness scenes count, not just near-white patches. Gain step 0.03 instead of 0.5 so it tracks smoothly.",
+            "model": 0,
+            "min_counted": 1000,
+            "min_red_gain_step": 0.03,
+            "min_blue_gain_step": 0.03,
+            "red_gain_scale": 1.0,
+            "blue_gain_scale": 1.0,
+            "range": {
+                "green": {
+                    "max": 230,
+                    "min": 40
+                },
+                "rg": {
+                    "max": 1.2,
+                    "min": 0.22
+                },
+                "bg": {
+                    "max": 1.2,
+                    "min": 0.26
+                }
+            },
+            "green_luma_env": "ae.luma.avg",
+            "green_luma_init": 200,
+            "green_luma_step_ratio": 0.3
+        },
+        "acc": {
+            "saturation": [
+                {
+                    "color_temp": 0,
+                    "value": 128
+                }
+            ],
+            "//ccm": "4559 K matrix from Raspberry Pi libcamera src/ipa/rpi/vc4/data/imx477.json (BSD-2-Clause), fetched 2026-11-09. Single entry: gray-world AWB does not export a colour temperature, so a CT-indexed table would always pick one row anyway. low_luma stays identity so dark scenes do not amplify noise.",
+            "ccm": {
+                "low_luma": {
+                    "luma_env": "ae.luma.avg",
+                    "threshold": 28,
+                    "matrix": [
+                        1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0
+                    ]
+                },
+                "table": [
+                    {
+                        "color_temp": 0,
+                        "matrix": [
+                            2.15423,
+                            -0.98143,
+                            -0.17279,
+                            -0.38131,
+                            2.14763,
+                            -0.76632,
+                            -0.10069,
+                            -0.54383,
+                            1.64452
+                        ]
+                    }
+                ]
+            },
+            "//blc": "Sensor black level 4096/65536 of full scale per Raspberry Pi libcamera src/ipa/rpi/vc4/data/imx477.json (BSD-2-Clause), fetched 2026-11-09 = 64 at 10-bit = 16 at the ISP 8-bit scale (same 16 the Arducam IMX500/Pivariety configs use). Verify with the lens cap on: dark frame should read near-black and neutral.",
+            "blc": {
+                "model": 0,
+                "stretch": true,
+                "blc_table": [
+                    {
+                        "gain": 1,
+                        "blc_param": {
+                            "blc_top_left": 16,
+                            "blc_top_right": 16,
+                            "blc_bottom_left": 16,
+                            "blc_bottom_right": 16
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}

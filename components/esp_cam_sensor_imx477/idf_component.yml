@@ -1,0 +1,8 @@
+version: 0.1.0
+description: Sony IMX477 (Raspberry Pi HQ Camera) MIPI-CSI driver for ESP32-P4 esp_cam_sensor
+license: GPL-2.0-only
+targets:
+  - esp32p4
+dependencies:
+  idf: '>=5.4'
+  espressif/esp_cam_sensor: ^2.4

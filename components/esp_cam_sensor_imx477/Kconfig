@@ -1,0 +1,41 @@
+menu "Camera Sensor (IMX477)"
+
+    config CAMERA_IMX477
+        bool "Support IMX477 (Raspberry Pi HQ Camera)"
+        default y
+        help
+            Enable the Sony IMX477 MIPI-CSI driver. One mode: 1920x1520 RAW10
+            ~38 fps, the 2x2-binned full field digitally cropped from 2028 to
+            1920 wide to fit the ESP32-P4 datapath.
+
+    if CAMERA_IMX477
+
+        config CAMERA_IMX477_AUTO_DETECT_MIPI_INTERFACE_SENSOR
+            bool "Auto-detect IMX477 on the MIPI-CSI interface"
+            default y
+
+        config CAMERA_IMX477_HMIRROR
+            bool "Mirror the image left-right at start"
+            default y
+            help
+                Sensor-side horizontal mirror (0x0101 bit 0). On by default:
+                without it a lens-forward HQ Camera image is mirrored. The driver
+                moves the Bayer phase (RGGB -> GRBG) to match.
+
+        config CAMERA_IMX477_VFLIP
+            bool "Flip the image upside-down at start"
+            default n
+            help
+                Sensor-side vertical flip (0x0101 bit 1).
+
+        config CAMERA_IMX477_TEST_PATTERN_AT_START
+            bool "Output the colour-bar test pattern instead of the image"
+            default n
+            help
+                Bring-up aid: set_format turns on the sensor's colour-bar test
+                pattern, proving the CSI link, Bayer phase and ISP path without
+                depending on exposure, lens or focus.
+
+    endif
+
+endmenu
